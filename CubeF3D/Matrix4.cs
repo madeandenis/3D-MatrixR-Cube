@@ -45,6 +45,12 @@ namespace CubeF3D
                 a.M41 * b.M14 + a.M42 * b.M24 + a.M43 * b.M34 + a.M44 * b.M44
             );
         }
+        
+        public static Matrix4 operator *(Matrix4 a, Matrix4 b)
+        {
+            return Multiply(a, b);
+        }
+
 
         public static Point ApplyToPoint(Matrix4 matrix, Point point)
         {
@@ -107,6 +113,16 @@ namespace CubeF3D
                 sin, cos, 0, 0,
                 0, 0, 1, 0,
                 0, 0, 0, 1
+            );
+        }
+
+        public static Matrix4 TranslationMatrix(float tx, float ty, float tz)
+        {
+            return new Matrix4(
+                1, 0, 0, tx, 
+                0, 1, 0, ty, 
+                0, 0, 1, tz, 
+                0, 0, 0, 1   
             );
         }
 

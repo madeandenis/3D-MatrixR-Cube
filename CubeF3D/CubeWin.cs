@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace CubeF3D
@@ -67,20 +67,42 @@ namespace CubeF3D
         }
         public static Point TransformTo2D(Point point, Size size)
         {
-            // Perspective Projection
-            float d = 5.0f; // distance from the camera to the scene (viewer's distance)
+            float d = 20f; 
 
-            // Perspective transformation (with a simple scaling based on z)
             float x2D = point.X / (1 + point.Z / d);
-            float y2D = point.Y / (1 + point.Z / d);
+            float y2D = -point.Y / (1 + point.Z / d);
 
-            // Scale and translate to fit in the screen
             x2D = x2D * size.Width / 2 + size.Width / 2;
             y2D = -y2D * size.Height / 2 + size.Height / 2;
 
             return new Point(x2D, y2D);
         }
 
+    }
+
+    public class Camera
+    {
+        public Point Position { get; set; }
+        public Angle Rotation { get; set; }
+
+        public Camera(float x = 0, float y = 0, float z = 5)
+        {
+            Position = new Point(x, y, z);
+            Rotation = new Angle();
+        }
+
+        // Translate obj coordinates from world space into camera space
+        public Matrix4 GetViewMatrix()
+        {
+            // In camera space, the camera is at the origin
+            // => the entire scene must be moved so that objects are seen relative to the camera
+            Matrix4 translation = Matrix4.TranslationMatrix(-Position.X, -Position.Y, -Position.Z);
+            Matrix4 rotationX = Matrix4.RotationMatrix_X(-Rotation.X);
+            Matrix4 rotationY = Matrix4.RotationMatrix_Y(-Rotation.Y);
+            Matrix4 rotationZ = Matrix4.RotationMatrix_Z(-Rotation.Z);
+
+            return rotationX * rotationY * rotationZ * translation;
+        }
     }
 
     public class Cube
@@ -98,15 +120,18 @@ namespace CubeF3D
         private Point[] vertices3D;
         private Point[] vertices2D;
 
+        public Boolean coloredSides = false;
+
         public Boolean highlightedVertices = false;
         public float vEllipseSize = 20;
 
         public Color edgesColor = Color.ForestGreen;
+        public Color sideColor = Color.Turquoise;
 
         public Axis currentAxis = Axis.Y;
 
 
-        public Cube(Form form, float scale = 1f, float rotationSpeed = 0.1f)
+        public Cube(Form form, float scale = 1f, float rotationSpeed = 0.05f)
         {
             this.form = form;
 
@@ -150,10 +175,18 @@ namespace CubeF3D
             return transformedVertices;
         }
 
-        public void Render(PaintEventArgs e)
+        public void Render(PaintEventArgs e, Camera camera)
         {
             Point[] transformedVertices = ApplyTransformations(vertices3D);
 
+            // Apply camera view
+            Matrix4 viewMatrix = camera.GetViewMatrix();
+            for (int i = 0; i < transformedVertices.Length; i++)
+            {
+                transformedVertices[i] = Matrix4.ApplyToPoint(viewMatrix, transformedVertices[i]);
+            }
+
+            // Project to 2D 
             vertices2D = new Point[transformedVertices.Length];
             for (int i = 0; i < transformedVertices.Length; i++)
             {
@@ -162,6 +195,7 @@ namespace CubeF3D
 
             DrawEdges(e.Graphics);
             DrawHighlightedVertices(e.Graphics);
+            DrawColoredSides(e.Graphics);
         }
 
         private void DrawHighlightedVertices(Graphics g)
@@ -196,6 +230,41 @@ namespace CubeF3D
             }
         }
 
+        private void DrawColoredSides(Graphics g)
+        {
+            if (!coloredSides) return;
+            Brush brush = new SolidBrush(Color.FromArgb(128, sideColor));
+
+            int[][] faceVertices = new int[][]
+            {
+                new int[] { 0, 1, 2, 3 }, // Back
+                new int[] { 4, 5, 6, 7 }, // Front
+                new int[] { 0, 1, 5, 4 }, // Bottom
+                new int[] { 2, 3, 7, 6 }, // Top
+                new int[] { 0, 3, 7, 4 }, // Left
+                new int[] { 1, 2, 6, 5 }, // Right
+            };
+
+            for (int i = 0; i < faceVertices.Length; i++)
+            {
+                // Populate the face with the vertices 
+                Point[] face = new Point[4];
+                for (int j = 0; j < 4; j++)
+                {
+                    face[j] = vertices2D[faceVertices[i][j]];
+                }
+
+                // Convert the 2D Point array => array of PointF 
+                PointF[] facePoints = new PointF[4];
+                for (int k = 0; k < face.Length; k++)
+                {
+                    facePoints[k] = new PointF(face[k].X, face[k].Y);
+                }
+
+                g.FillPolygon(brush, facePoints);
+            }
+        }
+
         private void DrawEdges(Graphics g)
         {
             Pen pen = new Pen(edgesColor);
@@ -226,7 +295,10 @@ namespace CubeF3D
 
     public partial class CubeWin : Form
     {
-        Cube Cube { get; set; }
+        private Cube Cube { get; set; }
+        private Cube Cube2 { get; set; }
+        private Camera camera;
+
 
         private Timer timer;
         private int FPS = 60;
@@ -243,9 +315,14 @@ namespace CubeF3D
             this.DoubleBuffered = true; 
             this.MouseWheel += CubeWin_MouseWheel;
 
+            camera = new Camera();
+
             Cube = new Cube(this, scale: 1f);
             Cube.highlightedVertices = true;
             Cube.vEllipseSize = 40;
+
+            Cube2 = new Cube(this, scale: 0.2f);
+            Cube2.coloredSides = true;
 
             InitializeTimer();
 
@@ -261,6 +338,10 @@ namespace CubeF3D
                     Cube.rotationAngle.X += Cube.RotationSpeed;
                     Cube.rotationAngle.Y += Cube.RotationSpeed;
                     Cube.rotationAngle.Z += Cube.RotationSpeed;
+
+                    Cube2.rotationAngle.X -= Cube2.RotationSpeed;
+                    Cube2.rotationAngle.Y -= Cube2.RotationSpeed;
+                    Cube2.rotationAngle.Z -= Cube2.RotationSpeed;
                     Invalidate(); 
                 }
             };
@@ -270,7 +351,9 @@ namespace CubeF3D
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            Cube.Render(e);
+            Cube.Render(e, camera);
+            Cube2.Render(e, camera);
+            DebugInfo(e.Graphics);
         }
 
         private void CubeWin_KeyDown(object sender, KeyEventArgs e)
@@ -291,11 +374,52 @@ namespace CubeF3D
             {
                 paused = !paused; 
             }
+
+            float moveStep = 0.1f;
+            float rotateStep = 0.5f;
+
+            if (e.KeyCode == Keys.W) camera.Position.Z += moveStep; 
+            if (e.KeyCode == Keys.S) camera.Position.Z -= moveStep; 
+            if (e.KeyCode == Keys.A) camera.Position.X -= moveStep;
+            if (e.KeyCode == Keys.D) camera.Position.X += moveStep; 
+            if (e.KeyCode == Keys.Q) camera.Position.Y += moveStep; 
+            if (e.KeyCode == Keys.E) camera.Position.Y -= moveStep; 
+
+            if (e.KeyCode == Keys.Up) camera.Rotation.X -= rotateStep; 
+            if (e.KeyCode == Keys.Down) camera.Rotation.X += rotateStep; 
+            if (e.KeyCode == Keys.Left) camera.Rotation.Y -= rotateStep; 
+            if (e.KeyCode == Keys.Right) camera.Rotation.Y += rotateStep;
         }
 
         private void CubeWin_MouseWheel(object sender, MouseEventArgs e)
         {
             Cube.ScaleFactor += e.Delta > 0 ? 0.1f : -0.1f;
         }
+
+        private void DebugInfo(Graphics g)
+        {
+            Font font = new Font("Arial", 10);
+            Brush brush = Brushes.White;
+            float x = 10; 
+            float y = 10; 
+            float lineHeight = font.GetHeight(g); 
+
+            string[] stateInfo = new string[]
+            {
+            $"Camera Position: X={camera.Position.X:F2}, Y={camera.Position.Y:F2}, Z={camera.Position.Z:F2}",
+            $"Camera Rotation: X={camera.Rotation.X:F2}, Y={camera.Rotation.Y:F2}, Z={camera.Rotation.Z:F2}",
+            "",
+            $"Cube Rotation Angle: X={Cube.rotationAngle.X:F2}, Y={Cube.rotationAngle.Y:F2}, Z={Cube.rotationAngle.Z:F2}",
+            $"Cube Rotation Axis: {Cube.currentAxis}",
+            $"Cube Scale Factor: {Cube.ScaleFactor:F2}",
+            };
+
+            foreach (string line in stateInfo)
+            {
+                g.DrawString(line, font, brush, x, y);
+                y += lineHeight; 
+            }
+        }
+
     }
 }
